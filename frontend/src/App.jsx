@@ -1164,8 +1164,36 @@ function App() {
                 {selectedSession.qr_image ? (
                   <div className="session-qr">
                     <img alt="QR code students scan to open class check-in" src={selectedSession.qr_image} />
-                    <p>Students who saved their ID on this phone are checked in automatically when they scan.</p>
+                    <p>Students scan this QR code with their phone camera to check in.</p>
                     <small>The code expires at the session end time or when you close the session.</small>
+                    {selectedSession.check_in_url && (
+                      <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                          <button
+                            className="secondary-button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(selectedSession.check_in_url);
+                              alert('Check-in link copied to clipboard!');
+                            }}
+                            type="button"
+                          >
+                            📋 Copy check-in link
+                          </button>
+                          <a
+                            className="primary-button"
+                            href={selectedSession.check_in_url}
+                            rel="noopener noreferrer"
+                            style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
+                            target="_blank"
+                          >
+                            🔗 Open check-in in new tab
+                          </a>
+                        </div>
+                        <small style={{ color: '#64748b', fontSize: '0.78rem' }}>
+                          Phone users: Ensure your phone is connected to the same Wi-Fi.
+                        </small>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <p className="empty-state">This session is closed. Its QR code is no longer valid.</p>

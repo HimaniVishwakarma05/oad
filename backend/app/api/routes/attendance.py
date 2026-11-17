@@ -2,11 +2,11 @@ import base64
 import csv
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO, StringIO
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from uuid import uuid4
 
 import qrcode
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from jose import JWTError, jwt
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -101,11 +101,42 @@ def _qr_image(check_in_url: str) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
+def _resolve_frontend_url(request: Request | None = None) -> str:
+    if request is not None:
+        # Check custom header sent by frontend
+        custom_header = request.headers.get("x-frontend-url")
+        if custom_header:
+            parsed = urlparse(custom_header.strip())
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}"
+
+        # Check Origin header (e.g. if accessing directly via browser network IP)
+        origin = request.headers.get("origin")
+        if origin:
+            parsed = urlparse(origin.strip())
+            if parsed.scheme and parsed.netloc and parsed.hostname not in ("localhost", "127.0.0.1"):
+                return f"{parsed.scheme}://{parsed.netloc}"
+
+        # Check Referer header (e.g. when teacher is viewing dashboard on http://10.230.86.249:5173/)
+        referer = request.headers.get("referer")
+        if referer:
+            parsed = urlparse(referer.strip())
+            if parsed.scheme and parsed.netloc and parsed.hostname not in ("localhost", "127.0.0.1"):
+                port_part = f":{parsed.port}" if parsed.port else ""
+                return f"{parsed.scheme}://{parsed.hostname}{port_part}"
+
+    if settings.frontend_url:
+        return settings.frontend_url.rstrip("/")
+
+    return "http://localhost:5173"
+
+
 def _session_detail(
     db: Session,
     session: AttendanceSession,
     *,
     include_qr: bool = False,
+    request: Request | None = None,
 ) -> AttendanceSessionDetail:
     classroom = db.get(Classroom, session.classroom_id)
     if classroom is None:
@@ -119,12 +150,15 @@ def _session_detail(
     ) or 0
     duration_minutes = 0
     if session.start_time and session.end_time:
-        duration_minutes = max(0, int((session.end_time - session.start_time).total_seconds() // 60))
+        st = session.start_time.replace(tzinfo=timezone.utc) if session.start_time.tzinfo is None else session.start_time
+        et = session.end_time.replace(tzinfo=timezone.utc) if session.end_time.tzinfo is None else session.end_time
+        duration_minutes = max(0, int((et - st).total_seconds() // 60))
 
     check_in_url = None
     qr_image = None
     if include_qr and session.status == SessionStatus.ACTIVE and session.qr_code:
-        check_in_url = f"{settings.frontend_url.rstrip('/')}/?checkin={quote(session.qr_code, safe='')}"
+        base_frontend_url = _resolve_frontend_url(request)
+        check_in_url = f"{base_frontend_url}/?checkin={quote(session.qr_code, safe='')}"
         qr_image = _qr_image(check_in_url)
 
     return AttendanceSessionDetail(
@@ -141,6 +175,7 @@ def _session_detail(
         check_in_url=check_in_url,
         qr_image=qr_image,
     )
+
 
 
 def _is_expired(dt: datetime | None) -> bool:
@@ -196,6 +231,7 @@ def _close_session_and_mark_absences(db: Session, session: AttendanceSession) ->
 
 @router.get("/sessions", response_model=list[AttendanceSessionSummary])
 def list_sessions(
+    request: Request,
     db: Session = Depends(get_db),
     teacher: User = Depends(get_current_user),
 ) -> list[AttendanceSessionDetail]:
@@ -208,7 +244,7 @@ def list_sessions(
     sessions = list(db.scalars(query).all())
     for session in sessions:
         _expire_session_if_needed(db, session)
-    return [_session_detail(db, session) for session in sessions]
+    return [_session_detail(db, session, request=request) for session in sessions]
 
 
 @router.post(
@@ -218,6 +254,7 @@ def list_sessions(
 )
 def create_session(
     payload: AttendanceSessionCreate,
+    request: Request,
     db: Session = Depends(get_db),
     teacher: User = Depends(get_current_user),
 ) -> AttendanceSessionDetail:
@@ -275,12 +312,13 @@ def create_session(
             detail="Could not create the attendance session",
         ) from exc
     db.refresh(session)
-    return _session_detail(db, session, include_qr=True)
+    return _session_detail(db, session, include_qr=True, request=request)
 
 
 @router.get("/sessions/{session_id}", response_model=AttendanceSessionDetail)
 def get_session(
     session_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     teacher: User = Depends(get_current_user),
 ) -> AttendanceSessionDetail:
@@ -290,12 +328,14 @@ def get_session(
         db,
         session,
         include_qr=session.status == SessionStatus.ACTIVE,
+        request=request,
     )
 
 
 @router.post("/sessions/{session_id}/close", response_model=AttendanceSessionDetail)
 def close_session(
     session_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     teacher: User = Depends(get_current_user),
 ) -> AttendanceSessionDetail:
@@ -303,7 +343,8 @@ def close_session(
     if session.status == SessionStatus.ACTIVE:
         _close_session_and_mark_absences(db, session)
         db.refresh(session)
-    return _session_detail(db, session)
+    return _session_detail(db, session, request=request)
+
 
 
 @router.get("/sessions/{session_id}/records", response_model=list[AttendanceEntry])
