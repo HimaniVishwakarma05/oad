@@ -2,6 +2,7 @@ import base64
 import csv
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO, StringIO
+import socket
 from urllib.parse import quote, urlparse
 from uuid import uuid4
 
@@ -101,6 +102,17 @@ def _qr_image(check_in_url: str) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
+def _get_local_ip() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
 def _resolve_frontend_url(request: Request | None = None) -> str:
     if request is not None:
         # Check custom header sent by frontend
@@ -126,7 +138,13 @@ def _resolve_frontend_url(request: Request | None = None) -> str:
                 return f"{parsed.scheme}://{parsed.hostname}{port_part}"
 
     if settings.frontend_url:
-        return settings.frontend_url.rstrip("/")
+        cleaned = settings.frontend_url.rstrip("/")
+        if "10.81.203.154" not in cleaned:
+            return cleaned
+
+    local_ip = _get_local_ip()
+    if local_ip and local_ip not in ("127.0.0.1", "localhost"):
+        return f"http://{local_ip}:5173"
 
     return "http://localhost:5173"
 

@@ -12,6 +12,7 @@ frontend/.vite/
 # Python / Backend
 backend/.venv/
 .venv/
+.venv-fresh/
 **/__pycache__/
 *.pyc
 *.pyo
